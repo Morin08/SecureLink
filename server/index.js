@@ -18,13 +18,14 @@ const wss = new WebSocket.Server({ server });
 
 let activeCode = null;
 let activeSenderId = null;
+let senderSocket = null;
 
 function generateCode() {
   return crypto.randomInt(100000, 999999).toString();
 }
 
 function generateSenderId() {
-  return crypto.randomBytes(3).toString('hex').toUpperCase(); // e.g. "8D2C4F"
+  return crypto.randomBytes(3).toString('hex').toUpperCase();
 }
 
 wss.on('connection', (ws) => {
@@ -42,6 +43,7 @@ wss.on('connection', (ws) => {
     if (data.type === 'start-pairing') {
       activeCode = generateCode();
       activeSenderId = generateSenderId();
+      senderSocket = ws;
       ws.isVerified = true;
       ws.send(JSON.stringify({ type: 'pairing-code', code: activeCode, senderId: activeSenderId }));
       console.log('New pairing code generated:', activeCode, '| Sender ID:', activeSenderId);
@@ -51,25 +53,17 @@ wss.on('connection', (ws) => {
     if (data.type === 'verify-code') {
       if (data.code === activeCode) {
         ws.isVerified = true;
+        ws.deviceName = data.deviceName || 'Unnamed device';
         ws.send(JSON.stringify({ type: 'verified', success: true, senderId: activeSenderId }));
-        console.log('A receiver verified successfully');
+        console.log('A receiver verified successfully:', ws.deviceName);
+
+        if (senderSocket && senderSocket.readyState === WebSocket.OPEN) {
+          senderSocket.send(JSON.stringify({ type: 'peer-connected', deviceName: ws.deviceName }));
+        }
       } else {
         ws.send(JSON.stringify({ type: 'verified', success: false }));
         console.log('A receiver entered the wrong code');
       }
-      return;
-    }
-
-    if (data.type === 'chat') {
-      if (!ws.isVerified) {
-        console.log('Blocked message from unverified client');
-        return;
-      }
-      wss.clients.forEach((client) => {
-        if (client !== ws && client.readyState === WebSocket.OPEN && client.isVerified) {
-          client.send(JSON.stringify({ type: 'chat', text: data.text }));
-        }
-      });
       return;
     }
 
@@ -95,6 +89,7 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log('A client disconnected');
+    if (ws === senderSocket) senderSocket = null;
   });
 });
 
